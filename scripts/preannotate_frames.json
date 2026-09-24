@@ -1,0 +1,114 @@
+{
+  "source": "/app/data/frames/bruno_1",
+  "frames": [
+    {
+      "stem": "frame_000015",
+      "split": "val",
+      "boxes": 1
+    },
+    {
+      "stem": "frame_000018",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000020",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000021",
+      "split": "val",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000024",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000025",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000027",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000030",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000033",
+      "split": "val",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000035",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000036",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000039",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000040",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000042",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000045",
+      "split": "train",
+      "boxes": 3
+    },
+    {
+      "stem": "frame_000048",
+      "split": "train",
+      "boxes": 5
+    },
+    {
+      "stem": "frame_000050",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000051",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000054",
+      "split": "train",
+      "boxes": 5
+    },
+    {
+      "stem": "frame_000055",
+      "split": "train",
+      "boxes": 2
+    },
+    {
+      "stem": "frame_000057",
+      "split": "val",
+      "boxes": 2
+    }
+  ],
+  "train_images": 17,
+  "val_images": 4,
+  "total_boxes": 48,
+  "review_dir": "/app/data/dataset/review"
+}

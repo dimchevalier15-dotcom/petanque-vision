@@ -1,0 +1,9 @@
+services:
+  vision:
+    build: .
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./videos:/app/videos
+      - ./models:/app/models
+      - ./data:/app/data

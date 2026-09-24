@@ -1,0 +1,22 @@
+# Copier ce fichier vers data/dataset/data.yaml et adapter si besoin.
+#
+# Structure attendue :
+# data/dataset/
+# ├── data.yaml
+# ├── images/
+# │   ├── train/
+# │   └── val/
+# └── labels/
+#     ├── train/
+#     └── val/
+
+path: /app/data/dataset
+train: images/train
+val: images/val
+
+# Ordre des classes : identique à l'export Roboflow (YOLOv8).
+nc: 3
+names:
+  0: Boule
+  1: Cercle de jeu
+  2: Cochonnet

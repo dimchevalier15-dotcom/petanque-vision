@@ -1,0 +1,53 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Modèles lourds
+models/*
+!models/.gitkeep
+!models/README.md
+*.pt
+*.onnx
+*.engine
+
+# Médias (trop lourds pour Git — sources sur disque / téléphone / Roboflow)
+videos/input/**
+!videos/input/.gitkeep
+videos/output/**
+!videos/output/.gitkeep
+
+# Données brutes extraites des vidéos (regénérables avec scripts/extract_frames)
+data/frames/
+
+# Export Roboflow YOLO (télécharger / réimporter, ne pas versionner)
+data/dataset/train/
+data/dataset/valid/
+data/dataset/test/
+data/dataset/**/*.cache
+data/dataset/data.yaml
+data/roboflow/
+models/runs/
+
+# Environnement
+.env
+.env.*

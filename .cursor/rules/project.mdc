@@ -1,0 +1,57 @@
+---
+description: Principes et scope du projet Petanque Vision
+globs:
+alwaysApply: true
+---
+
+# Petanque Vision
+
+## Principes du projet
+
+C'est un **POC expérimental de computer vision**.
+
+Priorités :
+
+1. simplicité ;
+2. rapidité d'itération ;
+3. reproductibilité ;
+4. mesures objectives ;
+5. code lisible et testable.
+
+Ne pas sur-architecturer.
+
+Ne pas créer :
+
+- microservices ;
+- repositories ;
+- services abstraits ;
+- dependency injection complexe ;
+- API ;
+- frontend ;
+- base de données ;
+
+tant que ce n'est pas réellement nécessaire.
+
+## Scope actuel
+
+Le scope actuel est uniquement la préparation du projet.
+
+Les futures briques seront :
+
+1. vidéo ;
+2. détection des boules avec YOLO ;
+3. tracking avec ByteTrack ;
+4. trajectoires ;
+5. détection des lancers ;
+6. attribution aux joueurs ;
+7. score.
+
+Ne pas implémenter les étapes futures automatiquement.
+
+## Principe important
+
+Pour le futur système de tracking :
+
+**Une boule non identifiée ou un track perdu est préférable à une mauvaise attribution d'identité.**
+
+Le système devra être conservateur et accepter l'état `UNKNOWN` lorsqu'il n'est pas suffisamment certain.
