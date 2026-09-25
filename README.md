@@ -1,98 +1,155 @@
 # Petanque Vision
 
-Projet de computer vision pour analyser des vidéos de parties de pétanque filmées avec une caméra fixe.
+Experimental computer vision POC for **fixed-camera** pétanque footage: detect balls, jack (*cochonnet*), and throwing circle, measure distances on the court plane, and track balls across video with ByteTrack.
 
-À terme, l'objectif est de détecter et suivre les boules, identifier les lancers, attribuer les boules aux joueurs, puis calculer automatiquement certaines informations de jeu.
+Longer-term goals (not all implemented yet): trajectories, throw detection, player assignment, scoring. The design is intentionally conservative: **a lost track or unknown identity is preferable to a wrong one**.
 
 ## Stack
 
 - Python 3.11
+- [Ultralytics YOLOv8](https://docs.ultralytics.com/) (`models/petanque.pt`)
+- [ByteTrack](https://github.com/ifzhang/ByteTrack) (via Ultralytics `model.track()`)
 - OpenCV
-- Ultralytics YOLO
-- ByteTrack
 - Docker / Docker Compose
 
-## Structure du projet
+## Project layout
 
 ```
 petanque-vision/
-├── app/              # Code applicatif
-├── videos/
-│   ├── input/      # Vidéos sources à analyser
-│   └── output/     # Résultats générés
-├── models/           # Modèles YOLO et poids entraînés
-├── tests/
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
+├── app/                    # Detection, video pipeline, tracking, court geometry
+├── scripts/                # CLI tools (calibration, pull, train, track, …)
+├── data/
+│   ├── calibration/        # Homography (example JSON only in Git)
+│   ├── dataset/            # YOLO dataset (not in Git)
+│   └── tracker/            # ByteTrack YAML (petanque_bytetrack.yaml)
+├── models/                 # Weights (petanque.pt — not in Git)
+├── videos/input/           # Source videos (not in Git)
+├── videos/output/          # Annotated videos, frames, JSON (not in Git)
+└── tests/
 ```
 
-## Démarrage rapide
+## Quick start
 
-### Construire l'image
+### Build
 
 ```bash
 docker compose build
 ```
 
-### Détecter les boules (YOLO)
+### Model weights
 
-**Prérequis :** un fichier de poids local `models/petanque-2.pt` (non versionné dans Git).
+Place a trained weights file at **`models/petanque.pt`** (see [models/README.md](models/README.md)).
 
-#### Modèle Roboflow Universe
+**Classes (IDs 0 → 2):** `Boule`, `Cercle de jeu`, `Cochonnet`
 
-Projet : **[Petanque 2](https://universe.roboflow.com/b2bpu/petanque-2)** (`b2bpu/petanque-2`, version 1)
-
-- **Classes** : `Boule`, `Cercle de jeu`, `Cochonnet`
-- **~160 images**
-
-> **Limitation Roboflow Universe** : les poids `.pt` du modèle public ne sont **pas** téléchargeables (404). La voie propre hors ligne est de télécharger le **dataset** (YOLOv8) puis d'entraîner localement un YOLOv8n.
-
-1. Créez une clé API gratuite sur [Roboflow](https://app.roboflow.com/settings/api)
-2. Exportez la clé (ou copiez `.env.example` vers `.env`) :
+Train locally after exporting a YOLOv8 dataset from Roboflow into `data/dataset/`:
 
 ```bash
-export ROBOFLOW_API_KEY=votre_cle
+docker compose run --rm vision python -m scripts.train
 ```
 
-3. Téléchargez le dataset et entraînez le modèle (une seule fois) :
+Optional Roboflow download + train: `scripts/download_roboflow_model.py` (requires `ROBOFLOW_API_KEY`).
 
-```bash
-docker compose build
-docker compose run --rm -e ROBOFLOW_API_KEY vision sh -c \
-  'pip install -q -r requirements-download.txt && python -m scripts.download_roboflow_model --train'
-```
+### Run batch detection (input → output)
 
-Le poids est produit dans `models/petanque-2.pt`.
-
-> **Note** : `petanque-2` sur Universe n'a pas de version exportable directement. Le script fork automatiquement le dataset dans votre workspace Roboflow, génère une version, puis télécharge.
-
-Pour un autre dataset Roboflow, surchargez `ROBOFLOW_WORKSPACE`, `ROBOFLOW_PROJECT`, `ROBOFLOW_VERSION` et éventuellement `ROBOFLOW_UNIVERSE_URL`.
-
-> Ne commitez jamais votre clé API. Utilisez `export ROBOFLOW_API_KEY=...` ou un fichier `.env` local (gitignoré).
-
-#### Lancer la détection
+Put `.mp4` / images in `videos/input/`, then:
 
 ```bash
 docker compose run --rm vision
 ```
 
-Pour chaque fichier dans `videos/input/` (`.mp4`, `.jpg`, `.png`) :
+Writes annotated media to `videos/output/` (e.g. `match_detected.mp4`).
 
-- inférence YOLO frame par frame (vidéo) ou image unique ;
-- sortie annotée dans `videos/output/` (ex. `bruno_1_detected.mp4`).
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `PETANQUE_MODEL_PATH` | `/app/models/petanque.pt` | Weights path |
+| `PETANQUE_CONFIDENCE` | `0.5` | Detection confidence threshold |
 
-Variables optionnelles :
+---
 
-- `PETANQUE_MODEL_PATH` — chemin du modèle (défaut : `/app/models/petanque-2.pt`)
-- `PETANQUE_CONFIDENCE` — seuil de confiance (défaut : `0.5`)
+## Workflows (scripts)
 
-## Vidéos
+All commands assume repo root and Docker unless noted.
 
-Placez vos vidéos sources dans `videos/input/`.
+### Pull video from phone (adb)
 
-Les fichiers générés (copies, annotations, vidéos annotées, etc.) apparaîtront dans `videos/output/`. Ce dossier est monté dans le container, les sorties restent accessibles sur la machine hôte.
+```bash
+# List recent MP4s on device
+python -m scripts.pull_phone_video --list --list-limit 30
 
-## Modèles
+# Bit-exact copy (recommended for Samsung 4K/HEVC)
+python -m scripts.pull_phone_video --copy-only 20260922_174531_1.mp4 -o videos/input
 
-Les poids de modèles YOLO et fichiers associés se placent dans `models/`.
+# Optional: pull + re-encode to H.264 4K (slow; useful for huge 8K sources)
+python -m scripts.pull_phone_video 20260922_190251.mp4 -o videos/input
+```
+
+### Extract frames
+
+```bash
+docker compose run --rm vision python -m scripts.extract_frames --help
+```
+
+### Court calibration (homography → metres)
+
+World frame: **X** = 3 m between side cords, **Y** = along the piste.
+
+```bash
+# Interactive pick (needs OpenCV GUI on host, not headless Docker)
+python -m scripts.calibrate_court pick \
+  --image data/frames/.../frame.jpg \
+  --output data/calibration/points.json
+
+# Edit world_points in JSON, then fit H
+python -m scripts.calibrate_court fit \
+  --points data/calibration/points.json \
+  --output data/calibration/homography.json
+```
+
+Zoom/pan in `pick`: mouse wheel or `+`/`-`, arrows or right-drag pan, left-click points.
+
+### Distances (YOLO + homography)
+
+Single image: detect balls and jack, distance ball → jack (75 mm ball radius + ground contact heuristic), circle → jack (bbox edge toward jack).
+
+```bash
+docker compose run --rm vision python -m scripts.measure_distances \
+  --image data/frames/.../frame.jpg \
+  --calibration data/calibration/homography.json \
+  --conf 0.25
+```
+
+Output: composite image + optional JSON under `videos/output/`.
+
+### Tracking (YOLO + ByteTrack)
+
+**Use the raw video**, not a previously annotated `_detected` file (burned-in boxes confuse detection and spawn phantom track IDs).
+
+```bash
+docker compose run --rm vision python -m scripts.track_video \
+  --video videos/input/20260922_174531_1_1.mp4 \
+  --output videos/output/20260922_174531_1_1_tracked.mp4 \
+  --conf 0.35 \
+  --min-hits 4
+```
+
+- Tracker config: `data/tracker/petanque_bytetrack.yaml` (stricter than Ultralytics defaults).
+- Only **Boule** class is tracked; trails and `#id` labels after `--min-hits` frames.
+- ByteTrack links detections frame-to-frame (Kalman + IoU). It does **not** preserve game state through long camera occlusion; a higher-level “board state” layer is planned for that.
+
+---
+
+## What is in Git
+
+- Application code, scripts, Docker, tracker YAML, calibration **examples**
+- **Not** in Git: `*.pt`, `videos/**`, `data/frames/`, dataset images, personal calibration JSON, `.env`
+
+## Tests
+
+```bash
+docker compose run --rm vision python -m pytest tests/
+```
+
+## License / status
+
+POC for iteration and measurement on real footage. APIs and scripts may change.

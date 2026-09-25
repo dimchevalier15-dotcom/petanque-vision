@@ -1,0 +1,16 @@
+{
+  "image": "data/frames/20260922_174531_1_1/frame_1m04.jpg",
+  "image_points": [
+    [0.0, 0.0],
+    [0.0, 0.0],
+    [0.0, 0.0],
+    [0.0, 0.0]
+  ],
+  "world_points": [
+    [0.0, 0.0],
+    [3.0, 0.0],
+    [0.0, 8.0],
+    [3.0, 8.0]
+  ],
+  "notes": "Remplacer image_points par les pixels (u,v). Y monde = distance le long de la piste depuis le repère choisi ; ajuster les Y si tu ne connais que la largeur 3 m (échelle relative en Y via 2 paires de cordes)."
+}

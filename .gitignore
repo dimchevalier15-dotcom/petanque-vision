@@ -39,6 +39,11 @@ videos/output/**
 # Données brutes extraites des vidéos (regénérables avec scripts/extract_frames)
 data/frames/
 
+# Calibrations caméra (par installation)
+data/calibration/*
+!data/calibration/.gitkeep
+!data/calibration/*.example.json
+
 # Export Roboflow YOLO (télécharger / réimporter, ne pas versionner)
 data/dataset/train/
 data/dataset/valid/
