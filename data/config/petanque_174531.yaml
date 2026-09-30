@@ -1,0 +1,7 @@
+# Vidéo 20260922_174531_* : zone de jeu en mètres via l'homographie locale (non versionnée).
+# Piste = 3 m entre cordes (x 0..3) ; on tolère un peu de marge latérale et on prolonge la zone
+# vers la caméra (y jusqu'à 14 m) : un objet qui quitte l'image par le bas n'est PAS « sorti du terrain ».
+field:
+  calibration: data/calibration/174531_homography.json
+  world_polygon: [[-0.4, -1.5], [3.4, -1.5], [3.4, 14.0], [-0.4, 14.0]]
+  margin: 0.0

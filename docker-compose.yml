@@ -4,6 +4,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./scripts:/app/scripts
+      - ./tests:/app/tests
       - ./videos:/app/videos
       - ./models:/app/models
       - ./data:/app/data

@@ -1,0 +1,92 @@
+# Configuration TrackManager + GameState (valeurs par défaut = celles du code).
+# Distances en DIAMÈTRES de boule (taille apparente du track), vitesses en diamètres/frame :
+# les seuils ne dépendent donc ni de la résolution ni de la perspective.
+# Toute clé inconnue est refusée au chargement (typo = erreur, pas comportement silencieux).
+
+tracking:
+  # --- occultations (frames) ---
+  max_occlusion_frames: 30              # track en mouvement : fenêtre de réidentification
+  max_stationary_occlusion_frames: 900  # track immobile : sa position est connue, on attend bien plus
+  short_gap_frames: 2                   # trou <= : continuité ; > : réidentification (plus stricte)
+  min_hits_confirm: 3                   # détections avant qu'un track soit considéré comme réel
+  tentative_max_missing: 2              # un track non confirmé (flash YOLO) disparaît vite
+
+  # --- portes d'association (diamètres) ---
+  position_gate: 0.75                   # écart max à la position prédite (base)
+  velocity_uncertainty: 0.35            # la porte grandit avec vitesse * dt
+  gate_growth_per_frame: 0.03           # la porte grandit avec dt
+  stationary_max_gate: 1.5              # plafond pour un track immobile
+  moving_max_gate: 14.0                 # plafond pour un track rapide
+  velocity_gate: 1.0                    # tolérance relative de vitesse (score)
+  velocity_decay: 0.95                  # frottement dans la prédiction : v(t+1) = decay * v(t)
+  static_speed_cap: 0.08                # STATIONARY mais plus vite que ça = départ en cours
+  direction_gate_deg: 120.0             # rejet dur au-delà (déplacements significatifs)
+  size_ratio_gate: 1.8                  # rejet dur si la taille de bbox varie plus
+  bytetrack_gate_multiplier: 2.0        # porte élargie quand ByteTrack confirme l'ID
+
+  # --- décisions ---
+  match_threshold: 0.35                 # continuité
+  reidentification_threshold: 0.55      # réapparition après occultation
+  ambiguity_margin: 0.12                # 2 candidats à moins que ça => ambigu => on ne choisit pas
+  ambiguity_confidence_factor: 0.7
+  gap_penalty: 0.25
+  weights:
+    position: 0.45
+    velocity: 0.15
+    direction: 0.10
+    size: 0.10
+    bytetrack: 0.20
+
+  # --- fusion / doublons ---
+  duplicate_merge_threshold: 0.70       # fusion rétroactive de fragments
+  merge_window_frames: 20
+  merge_min_points: 3
+  merge_max_gap_frames: 60
+  duplicate_iou_threshold: 0.5          # 2 tracks simultanés quasi superposés...
+  duplicate_min_frames: 10              # ... pendant au moins ça
+  duplicate_release_iou: 0.3            # un ID ByteTrack doublon n'est ignoré que tant qu'il recouvre l'original
+
+  # --- confiance d'identité ---
+  identity_recovery_per_frame: 0.01
+  detection_confidence_ema: 0.2
+  size_ema: 0.2
+
+  # --- sortie de zone ---
+  exit_min_speed: 0.25
+  exit_horizon_frames: 20
+  exit_decision_delay: 3
+  out_of_play_confirm_frames: 90
+  out_of_play_max_confidence: 0.75
+
+motion:
+  window_frames: 8
+  stationary_threshold: 0.04            # diam/frame
+  stationary_extent: 0.25               # dispersion max sur la fenêtre (diam)
+  moving_threshold: 0.12                # diam/frame
+  fast_threshold: 0.8                   # diam/frame : tir
+  min_motion_frames: 3                  # hystérésis : frames consécutives pour MOVING
+  min_stationary_frames: 8              # hystérésis : frames consécutives pour STATIONARY
+  move_start_displacement: 0.3          # diam depuis l'ancre pour quitter STATIONARY
+  slowing_ratio: 0.5
+  noise_floor: 0.03
+  accel_lag_frames: 4
+  direction_change_lag_frames: 6
+
+game:
+  jack_stabilization_time: 1.0          # s
+  ball_stabilization_time: 1.0          # s
+  ball_play_detection_window: 1.5       # s : recherche d'un impact avant un départ
+  impact_radius: 3.0                    # diam
+  min_play_travel: 1.5                  # diam
+  max_play_duration: 8.0                # s
+  expected_ball_count: 12               # 0 = pas de END_OF_MENE automatique
+  jack_loss_grace: 3.0                  # s
+
+field:
+  # Par défaut : tout le cadre. Sinon un polygone (normalisé 0..1 ou pixel)
+  # ou une calibration (homographie) + zone de jeu en mètres.
+  polygon: null
+  polygon_space: normalized
+  calibration: null
+  world_polygon: null
+  margin: 0.0

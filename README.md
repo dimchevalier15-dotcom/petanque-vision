@@ -137,6 +137,45 @@ docker compose run --rm vision python -m scripts.track_video \
 - Only **Boule** class is tracked; trails and `#id` labels after `--min-hits` frames.
 - ByteTrack links detections frame-to-frame (Kalman + IoU). It does **not** preserve game state through long camera occlusion; a higher-level “board state” layer is planned for that.
 
+### TrackManager + GameState (logic layer above ByteTrack)
+
+```
+YOLO -> ByteTrack -> Observation -> TrackManager -> PetanqueGameState
+                                     (logical tracks)  (mène: jack, ball sequence, phases)
+```
+
+Code in `app/petanque/` (pure Python + numpy, no Ultralytics needed): `track_manager.py`
+(persistence, occlusion, re-identification, fragment merge, exit candidates), `association.py`
+(isolated, testable scoring with reasons), `motion.py` (velocity, MOVING / SLOWING / STATIONARY
+with hysteresis), `game_state.py` (SETUP → JACK_THROW → JACK_STABILIZED → BALL_PLAY →
+BALL_STABILIZED → NEXT_BALL → END_OF_MENE), `field.py` (`field.contains(pos)`),
+`metrics.py`, `visualization.py`. All thresholds live in `data/config/petanque.yaml`
+(distances in ball diameters, so they do not depend on resolution/perspective).
+
+Rules that drive every decision: ByteTrack IDs are a hint, not truth; an ambiguous
+re-identification is refused (**UNKNOWN > wrong identity**); proximity is never identity
+(merges require temporal + spatial consistency and no temporal overlap); a disappearing ball is
+only an *out-of-play candidate* (confidence capped), never a certainty.
+
+Two steps — the slow YOLO step is done once per video, the logic is replayed instantly:
+
+```bash
+# 1) YOLO + ByteTrack -> observations.jsonl (Docker, slow)
+docker compose run --rm vision python -m scripts.record_observations \
+  --video videos/input/20260922_174531_1_1.mp4 \
+  --output videos/output/20260922_174531_1_1_observations.jsonl --conf 0.25
+
+# 2) TrackManager + GameState + metrics + debug video (seconds; add --video for debug.mp4)
+docker compose run --rm vision python -m scripts.analyze_tracks \
+  --observations videos/output/20260922_174531_1_1_observations.jsonl \
+  --video videos/input/20260922_174531_1_1.mp4 --config data/config/petanque.yaml --scale 0.5
+```
+
+Outputs in `videos/output/<name>_petanque/`: `events.jsonl` (structured decisions with
+confidence + reasons), `metrics.json` (ByteTrack alone vs + TrackManager), `report.txt`,
+`debug.mp4` (`--render-from/--render-to` renders only a frame window). Use `data/config/petanque_174531.yaml` for the calibrated video (field in metres via homography). `PlayerContext` / `PlayerContextProvider` (in `game_state.py`) is the injection
+point for future player attribution — nothing is inferred today.
+
 ---
 
 ## What is in Git
@@ -147,7 +186,8 @@ docker compose run --rm vision python -m scripts.track_video \
 ## Tests
 
 ```bash
-docker compose run --rm vision python -m pytest tests/
+docker compose run --rm vision python -m unittest discover -s tests -t .
+# or, without Docker (logic layer only, needs numpy + pyyaml + opencv): python -m pytest tests --ignore=tests/test_video.py
 ```
 
 ## License / status
