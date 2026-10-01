@@ -176,6 +176,73 @@ confidence + reasons), `metrics.json` (ByteTrack alone vs + TrackManager), `repo
 `debug.mp4` (`--render-from/--render-to` renders only a frame window). Use `data/config/petanque_174531.yaml` for the calibrated video (field in metres via homography). `PlayerContext` / `PlayerContextProvider` (in `game_state.py`) is the injection
 point for future player attribution — nothing is inferred today.
 
+### ThrowEventDetector (throws + manual attribution)
+
+```
+TrackManager events -> ThrowEventDetector -> ThrowEvent -> manual annotation (PLAYER_A / PLAYER_B / UNKNOWN)
+                       (+ CollisionDetector)                (annotations.json, never overwritten by re-detection)
+```
+
+It **detects throws, it does not recognise players** (no face, clothing, BLE, circle...). Every
+movement episode (from `BALL_MOVE_STARTED` to stop / confirmed exit / lost track / end of video) is
+classified `THROW`, `UNKNOWN` (kept for human review), `DISPLACED` (moved by a collision),
+`JACK_*` (jack is never a ThrowEvent) or `IGNORED` (noise). The decision is an additive score whose
+every term is listed in `detection_reasons`; context of the other tracks (jack stabilised?
+concurrent movement? probable collision displacement? ambiguous identity?) lowers it. Thresholds:
+`throws:` section of `data/config/petanque.yaml`. Code: `throws.py` (data), `collisions.py`,
+`throw_detector.py`, `throw_export.py`, `annotations.py`, `clips.py`, `throw_eval.py`.
+
+`analyze_tracks` now also writes `throws.json` (full ThrowEvents + trajectories + collisions +
+discarded movements), `throws.csv`, `throws_report.txt` (one card per throw), `tracks.json`, and the
+debug video shows `THROW #n / BALL #id / CONF / STATE` and `COLLISION a -> b` overlays.
+
+```bash
+# attribute each throw by hand: [A] [B] [U] [X] not-a-throw [M] missed throw [V] watch the clip ...
+python -m scripts.annotate_throws --throws videos/output/<name>_petanque/throws.json \
+  --video videos/input/<name>.mp4 --scale 0.25
+
+# measure against a hand-made ground truth (see data/ground_truth/*.expected.json, or an annotations.json)
+python -m scripts.analyze_tracks ... --expected-throws data/ground_truth/20260922_174531_1_1.expected.json
+```
+
+Two behaviours added after the 3-minute video: a throw seen only as short blurred fragments is
+**recombined** (same direction, < 0.5 s apart, < 3 diameters; `stitch_*` in the config), and a track lost
+while slowing right next to another ball is read as *stopped against it* (`ON_FIELD`, weaker confidence,
+score capped at `contact_end_cap`; `contact_end_distance: 0` disables it). Both keep their reasons in
+`detection_reasons` / `final_state_reasons`.
+
+**Numbered-ball video** (only balls considered thrown and still in play are marked, `#k` = k-th ball of the mène;
+pre-existing balls, the jack, carried balls and `UNKNOWN` movements get no number):
+
+```bash
+python -m scripts.render_balls --observations videos/output/<name>_observations.jsonl \
+  --video videos/input/<name>.mp4 --scale 0.5     # -> <name>_petanque/balls.mp4, balls.json, balls_last.jpg
+```
+
+Orange ring = in flight, green = stopped, dashed = stopped against another ball (exact position not found).
+`balls.json` lists each ball (frames, final position, `position_source`, confidence, reasons) and the
+un-numbered uncertain movements.
+
+A ball that was at rest, vanishes and "restarts" a few frames later within 3 diameters under a new track is
+the *same ball pushed* (`DISPLACED`, `continues_track`; `rest_origin_*` in the config): it is not a new throw and
+keeps its number, with its position following the push.
+
+**The jack (`BUT`, magenta ring)** is located by colour (`app/petanque/jack_locator.py`), not by the YOLO class,
+which flips between ball and jack and loses the jack when a ball touches it: seed = a round yellow blob
+(HSV, size relative to the balls) persistent over 14 sampled frames, confirmed by the YOLO jack tracks as a hint;
+afterwards the mark stays on its reference. Solid ring = blob seen in that frame, dashed = not observed
+(hidden by a player, ...; last known position is kept). A move is accepted only after 10 consecutive stable frames
+on a round blob while the old spot is empty (a player's yellow clothing or the yellow throwing ring must never
+drag it). `jack.json` gives seed, final position, seen share and detected moves. Limits: a jack pushed while
+hidden is only re-found when seen again; `UNKNOWN` (dashed/held) is preferred to a wrong position.
+
+Error categories reported by the evaluation: `MISSED_THROW`, `FALSE_THROW`, `WRONG_BALL`,
+`COLLISION_AS_THROW`, `OCCLUSION_FAILURE`, `OUT_OF_PLAY_MISCLASSIFICATION`. An `UNKNOWN` ThrowEvent on
+a real throw is counted as an *abstention*, not as an error. Known limitations: `mene_id` is fixed
+to 1 (no mène segmentation); a throw whose track is fragmented by the TrackManager can yield two
+`UNKNOWN` events; pickups after a mène can look like throws; the throw zone (`throw_origin`) is
+optional and unused while the throwing circle is not detected.
+
 ---
 
 ## What is in Git

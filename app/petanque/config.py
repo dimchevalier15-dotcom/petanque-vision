@@ -102,6 +102,71 @@ class GameConfig:
 
 
 @dataclass
+class ThrowConfig:
+    """Détection des lancers et des collisions (couche au-dessus du TrackManager).
+
+    Distances en diamètres de boule, vitesses en diam/frame, durées en secondes (sauf `*_frames`).
+    """
+
+    # --- mouvement candidat : en dessous, ce n'est pas un lancer ---
+    min_travel: float = 4.0  # diam : portée (plus grand écart au départ) ; en dessous = bruit / simple frémissement
+    min_duration: float = 0.5  # s
+    max_duration: float = 10.0  # s : un mouvement qui ne finit jamais est abandonné (UNKNOWN)
+    min_peak_speed: float = 0.15  # diam/frame : en dessous = dérive / main qui tremble
+    confident_travel: float = 8.0  # diam : une grande portée est un indice de lancer
+    fast_speed: float = 0.25  # diam/frame : vitesse de pointe typique d'un lancer
+    held_ball_max_age: float = 3.0  # s : boule « née » depuis moins longtemps = encore en main
+    occlusion_gap_frames: int = 10  # trou de trajectoire à partir duquel on note une occultation
+    min_points: int = 4  # observations minimales dans le mouvement
+
+    # --- décision (score 0..1 -> THROW / UNKNOWN / ignoré) ---
+    throw_min_confidence: float = 0.60  # >= : event_type THROW
+    unknown_min_confidence: float = 0.35  # >= : event_type UNKNOWN (à revoir par un humain) ; < : ignoré
+    high_confidence: float = 0.80  # seuil de « confiance élevée » dans les résumés
+    concurrent_penalty: float = 0.15  # un autre mouvement de boule non expliqué en même temps
+    ambiguous_identity_penalty: float = 0.20  # le TrackManager a refusé de ré-identifier ce track
+    unexplained_old_ball_penalty: float = 0.25  # boule ancienne qui bouge sans cause visible
+    jack_unstable_penalty: float = 0.40  # le cochonnet n'est pas encore stabilisé
+    no_jack_penalty: float = 0.15  # aucun cochonnet vu
+    unclean_end_cap: float = 0.55  # fin non observée (perdu, timeout) : plafond du score
+
+    # --- mouvements fragmentés / fins au contact d'une autre boule ---
+    stitch_gap: float = 0.5  # s : deux fragments « entrés en mouvement » aussi proches dans le temps = même lancer
+    stitch_max_distance: float = 3.0  # diam : écart max entre la fin du 1er fragment et le début du 2e
+    stitch_max_angle: float = 70.0  # degrés : le 2e fragment doit prolonger la direction du 1er
+    contact_end_distance: float = 2.2  # diam : track perdu à cette distance d'une boule présente = arrêt au contact (0 = off)
+    contact_end_max_speed: float = 0.15  # diam/frame : ... s'il ralentissait (ou s'il venait de la heurter)
+    contact_end_cap: float = 0.70  # plafond du score pour une fin « perdue au contact » (> unclean_end_cap)
+
+    # --- collisions ---
+    contact_distance: float = 1.6  # diam : centres plus proches que ça = contact possible
+    collision_min_source_speed: float = 0.15  # diam/frame
+    collision_window_frames: int = 4  # fenêtre de vitesse avant / après le contact
+    collision_settle_frames: int = 5  # attente après le contact avant d'évaluer la réponse
+    collision_min_delta_v: float = 0.10  # diam/frame : réponse de la cible
+    collision_min_direction_change: float = 25.0  # degrés : déviation de la source
+    collision_min_speed_drop: float = 0.6  # fraction : arrêt brutal de la source
+    collision_max_contact_distance: float = 1.35  # diam : déviation / arrêt sans cible => contact net requis
+    collision_max_align_angle: float = 80.0  # degrés : la source doit viser la cible
+    collision_min_approach: float = 0.4  # diam : la source s'est bien rapprochée
+    collision_cooldown_frames: int = 30  # une même paire n'est pas réévaluée pendant ce temps
+    collision_min_confidence: float = 0.50  # en dessous : pas de candidat
+    collision_probable_confidence: float = 0.70
+    displaced_window: float = 0.5  # s : le départ d'une boule est « expliqué » par un contact proche dans le temps
+    displaced_min_confidence: float = 0.70  # cible d'une collision probable => déplacée, pas lancée
+    rest_origin_distance: float = 3.0  # diam : un mouvement « entré en mouvement » qui démarre là où une boule au repos vient
+    rest_origin_window: float = 0.5  # s : de disparaître (dans ce délai) est cette boule repartie, pas un nouveau lancer
+    rest_origin_min_rest: float = 1.0  # s : durée minimale d'immobilité de la boule d'origine
+
+    # --- zone de lancer (futur cercle ; optionnelle) ---
+    throw_zone_center: list[float] | None = None  # [x, y] en pixels
+    throw_zone_radius: float = 0.0  # pixels
+    origin_max_distance: float = 8.0  # diam hors de la zone au-delà desquels le départ est suspect
+    zone_bonus: float = 0.10
+    zone_penalty: float = 0.25
+
+
+@dataclass
 class FieldConfig:
     # Une seule source de géométrie (priorité : calibration > polygon > plein cadre).
     polygon: list[list[float]] | None = None
@@ -116,6 +181,7 @@ class PipelineConfig:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     game: GameConfig = field(default_factory=GameConfig)
+    throws: ThrowConfig = field(default_factory=ThrowConfig)
     field: FieldConfig = field(default_factory=FieldConfig)
 
 
@@ -130,7 +196,7 @@ def _build(cls: type, data: dict[str, Any] | None, path: str = "") -> Any:
 
 def config_from_dict(data: dict[str, Any] | None) -> PipelineConfig:
     data = data or {}
-    sections = {"tracking": TrackingConfig, "motion": MotionConfig, "game": GameConfig, "field": FieldConfig}
+    sections = {"tracking": TrackingConfig, "motion": MotionConfig, "game": GameConfig, "throws": ThrowConfig, "field": FieldConfig}
     unknown = set(data) - set(sections)
     if unknown:
         raise ValueError(f"Sections de config inconnues : {sorted(unknown)}")

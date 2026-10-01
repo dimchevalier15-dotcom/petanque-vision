@@ -1,10 +1,14 @@
-"""Rejoue TrackManager + GameState sur des observations enregistrées ; métriques ; vidéo debug.
+"""Rejoue TrackManager + GameState + ThrowEventDetector sur des observations enregistrées.
 
 Sorties (dans --out-dir) :
-  events.jsonl   log structuré de toutes les décisions (valeur, confiance, raisons)
-  metrics.json   ByteTrack seul vs ByteTrack + TrackManager (+ événements)
-  report.txt     état final de la mène
-  debug.mp4      (si --video) boîtes, IDs logique/ByteTrack, états, trajectoires, événements
+  events.jsonl       log structuré de toutes les décisions (valeur, confiance, raisons)
+  metrics.json       ByteTrack seul vs + TrackManager, résumé des lancers (+ scores si vérité terrain)
+  report.txt         état final de la mène (GameState)
+  tracks.json        logical tracks : identité, chaîne d'IDs ByteTrack, trajectoire
+  throws.json        ThrowEvents + collisions + mouvements écartés (entrée de scripts.annotate_throws)
+  throws.csv         récapitulatif des lancers
+  throws_report.txt  un bloc lisible par lancer
+  debug.mp4          (si --video) boîtes, IDs, états, trajectoires, lancers, collisions
 
 Usage :
   python -m scripts.analyze_tracks \\
@@ -34,8 +38,17 @@ from app.petanque.metrics import (
     raw_bytetrack_sequences,
     score_events,
 )
-from app.petanque.pipeline import make_pipeline
+from app.petanque.pipeline import make_pipeline, make_throw_detector
 from app.petanque.recording import read_observations
+from app.petanque.throw_eval import expected_from_annotations, format_scores, score_throws
+from app.petanque.throw_export import (
+    format_summary,
+    summary,
+    throws_csv,
+    throws_document,
+    throws_report,
+    tracks_document,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,6 +99,10 @@ def main() -> None:
     p.add_argument("--render-from", type=int, default=0, help="Première frame écrite dans debug.mp4")
     p.add_argument("--render-to", type=int, default=None, help="Dernière frame écrite dans debug.mp4")
     p.add_argument("--expected-events", type=Path, default=None, help="JSON [{event, frame}] pour précision/rappel")
+    p.add_argument("--expected-throws", type=Path, default=None,
+                   help="vérité terrain des lancers (JSON {throws, not_throws} ou annotations.json)")
+    p.add_argument("--match-id", default=None, help="identifiant de la partie (défaut : nom du fichier)")
+    p.add_argument("--mene-id", type=int, default=1)
     args = p.parse_args()
 
     obs_path = _abs(args.observations)
@@ -99,6 +116,7 @@ def main() -> None:
 
     log = EventLog(out_dir / "events.jsonl")
     tm, gs = make_pipeline(cfg, field_, fps, log)
+    td = make_throw_detector(cfg, field_, fps, log, mene_id=args.mene_id)
     t0 = time.time()
 
     if args.video:
@@ -120,7 +138,7 @@ def main() -> None:
         try:
             for f, obs in enumerate(frames):
                 res = tm.update(f, obs)
-                gev = gs.update(f, tm, res.events)
+                gev = gs.update(f, tm, res.events) + td.update(f, tm, res.events, gs)
                 if f < args.render_from or (args.render_to is not None and f > args.render_to):
                     cap.grab()  # la logique tourne sur toutes les frames, le rendu seulement sur la fenêtre
                     renderer.observe(f, tm, res, gev)
@@ -128,7 +146,7 @@ def main() -> None:
                 ok, img = cap.read()
                 if not ok:
                     break
-                drawn = renderer.draw(img, f, tm, res, gs, gev)
+                drawn = renderer.draw(img, f, tm, res, gs, gev, td)
                 writer.write(cv2.resize(drawn, (ow, oh), interpolation=cv2.INTER_AREA) if args.scale != 1 else drawn)
                 if f % 300 == 0:
                     logging.info("  frame %d/%d", f, len(frames))
@@ -139,10 +157,26 @@ def main() -> None:
         for f, obs in enumerate(frames):
             res = tm.update(f, obs)
             gs.update(f, tm, res.events)
+            td.update(f, tm, res.events, gs)
+    if frames:
+        td.finalize(len(frames) - 1, tm)
     log.close()
     logging.info("Pipeline : %d frames en %.1fs", len(frames), time.time() - t0)
 
     metrics = compute_metrics(frames, tm, log, expected)
+    metrics["throws"] = summary(td, tm, len(frames))
+    match_id = args.match_id or obs_path.stem.replace("_observations", "")
+    (out_dir / "throws.json").write_text(
+        json.dumps(throws_document(td, cfg, meta, match_id, args.mene_id), indent=2, ensure_ascii=False))
+    (out_dir / "throws.csv").write_text(throws_csv(td.throws))
+    (out_dir / "throws_report.txt").write_text(throws_report(td.throws, args.mene_id) + "\n")
+    (out_dir / "tracks.json").write_text(json.dumps(tracks_document(tm, fps), ensure_ascii=False))
+    throw_scores = None
+    if args.expected_throws:
+        truth = json.loads(_abs(args.expected_throws).read_text())
+        truth = expected_from_annotations(truth) if "missed_throws" in truth or "annotations_updated_at" in truth else truth
+        throw_scores = score_throws(td.throws, truth)
+        metrics["throw_scores"] = throw_scores
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False))
     report = gs.report(tm)
     (out_dir / "report.txt").write_text(report + "\n")
@@ -152,6 +186,11 @@ def main() -> None:
         print(f"{k:<38}{v}")
     print("\n=== GameState ===")
     print(report)
+    print("\n=== ThrowEvents ===")
+    print(format_summary(metrics["throws"]))
+    if throw_scores is not None:
+        print("\n=== Évaluation des lancers (vérité terrain) ===")
+        print(format_scores(throw_scores))
     print(f"\nSorties : {out_dir}")
 
 

@@ -82,6 +82,60 @@ game:
   expected_ball_count: 12               # 0 = pas de END_OF_MENE automatique
   jack_loss_grace: 3.0                  # s
 
+throws:
+  # --- mouvement candidat : en dessous, ce n'est pas un lancer ---
+  min_travel: 4.0                       # diam : portée (plus grand écart au départ)
+  min_duration: 0.5                     # s
+  max_duration: 10.0                    # s : un mouvement qui ne finit jamais est abandonné (UNKNOWN)
+  min_peak_speed: 0.15                  # diam/frame
+  confident_travel: 8.0                 # diam : une grande portée est un indice de lancer
+  fast_speed: 0.25                      # diam/frame : vitesse de pointe typique d'un lancer
+  held_ball_max_age: 3.0                # s : boule née depuis moins longtemps = encore en main
+  occlusion_gap_frames: 10              # trou de trajectoire noté comme occultation
+  min_points: 4
+  # --- décision (score 0..1) ---
+  throw_min_confidence: 0.60            # >= : THROW
+  unknown_min_confidence: 0.35          # >= : UNKNOWN (à revoir) ; < : ignoré
+  high_confidence: 0.80                 # seuil des résumés « confiance élevée »
+  concurrent_penalty: 0.15
+  ambiguous_identity_penalty: 0.20
+  unexplained_old_ball_penalty: 0.25
+  jack_unstable_penalty: 0.40
+  no_jack_penalty: 0.15
+  unclean_end_cap: 0.55                 # fin non observée : plafond du score
+  # --- mouvements fragmentés / fins au contact d'une autre boule ---
+  stitch_gap: 0.5                       # s : fragments proches dans le temps = même lancer
+  stitch_max_distance: 3.0              # diam
+  stitch_max_angle: 70.0                # degrés
+  contact_end_distance: 2.2             # diam : track perdu près d'une boule présente = arrêt au contact (0 = off)
+  contact_end_max_speed: 0.15           # diam/frame
+  contact_end_cap: 0.70                 # plafond du score pour une fin perdue au contact
+  # --- collisions ---
+  contact_distance: 1.6                 # diam
+  collision_min_source_speed: 0.15      # diam/frame
+  collision_window_frames: 4
+  collision_settle_frames: 5
+  collision_min_delta_v: 0.10           # diam/frame : réponse de la cible
+  collision_min_direction_change: 25.0  # degrés
+  collision_min_speed_drop: 0.6         # fraction : arrêt brutal de la source
+  collision_max_contact_distance: 1.35  # diam
+  collision_max_align_angle: 80.0       # degrés
+  collision_min_approach: 0.4           # diam
+  collision_cooldown_frames: 30
+  collision_min_confidence: 0.50
+  collision_probable_confidence: 0.70
+  displaced_window: 0.5                 # s
+  displaced_min_confidence: 0.70
+  rest_origin_distance: 3.0             # diam
+  rest_origin_window: 0.5               # s
+  rest_origin_min_rest: 1.0             # s
+  # --- zone de lancer (futur cercle ; optionnelle) ---
+  throw_zone_center: null               # [x, y] en pixels
+  throw_zone_radius: 0.0                # pixels
+  origin_max_distance: 8.0              # diam
+  zone_bonus: 0.10
+  zone_penalty: 0.25
+
 field:
   # Par défaut : tout le cadre. Sinon un polygone (normalisé 0..1 ou pixel)
   # ou une calibration (homographie) + zone de jeu en mètres.

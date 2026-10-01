@@ -156,6 +156,11 @@ class EventType:
     BALL_STABILIZED = "BALL_STABILIZED"
     NEXT_BALL = "NEXT_BALL"
     END_OF_MENE = "END_OF_MENE"
+    # --- ThrowEventDetector ---
+    THROW_DETECTED = "THROW_DETECTED"  # data.event_type = THROW | UNKNOWN
+    MOVEMENT_DISMISSED = "MOVEMENT_DISMISSED"  # mouvement analysé mais pas un lancer (raisons dans l'événement)
+    JACK_MOVEMENT = "JACK_MOVEMENT"
+    COLLISION_CANDIDATE = "COLLISION_CANDIDATE"
 
 
 @dataclass

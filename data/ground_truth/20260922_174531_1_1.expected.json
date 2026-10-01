@@ -1,0 +1,11 @@
+{
+  "_note": "Vérité terrain relevée à la main sur la vidéo debug (images aux frames 860/900/942/948 et 1885/1915/1940/1955) puis recoupée avec les événements TrackManager. Les frames sont approximatives (tolérance d'appariement : 30 frames). Le 4e lancer est coupé par la fin de la vidéo : un humain le voit, le système doit s'abstenir (UNKNOWN).",
+  "video": "videos/input/20260922_174531_1_1.mp4",
+  "throws": [
+    {"start_frame": 852,  "end_frame": 942,  "final_state": "ON_FIELD"},
+    {"start_frame": 1401, "end_frame": 1481, "final_state": "ON_FIELD"},
+    {"start_frame": 1687, "end_frame": 1760, "final_state": "ON_FIELD"},
+    {"start_frame": 1890, "end_frame": 1956, "final_state": "UNKNOWN"}
+  ],
+  "not_throws": []
+}
