@@ -398,6 +398,37 @@ def relocate_contact_ends(balls: list[NumberedBall], frames: list[list[Observati
         b.position_source = "relocated_from_detections"
 
 
+def prepare_numbered_balls(
+    td: ThrowEventDetector,
+    tm: TrackManager,
+    frames: list[list[Observation]],
+) -> list[NumberedBall]:
+    """Trajectoires affichables : repos figé, relocate, collisions, déplacements DISPLACED."""
+    balls = number_balls(td, tm)
+    relocate_contact_ends(balls, frames)
+    apply_collision_display(balls, td, tm, frames)
+    return balls
+
+
+def display_position_at(
+    balls_by_throw: dict[int, NumberedBall],
+    static_final: dict[int, Point],
+    throw: ThrowEvent,
+    frame: int,
+) -> Point:
+    """Position d'une boule à une frame (résumé mène, overlay annotation)."""
+    nb = balls_by_throw.get(throw.throw_id)
+    if nb is not None:
+        p = nb.position_at(frame)
+        if p is not None:
+            return p
+        if nb.points and frame >= throw.end_frame:
+            return nb.points[-1]
+    if throw.throw_id in static_final:
+        return static_final[throw.throw_id]
+    return throw.final_position
+
+
 RING_JACK = (255, 0, 255)  # magenta : le but, distinct des boules
 
 

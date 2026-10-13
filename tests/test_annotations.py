@@ -111,6 +111,20 @@ class TestAnnotationSession(unittest.TestCase):
         s.save()
         self.assertEqual(AnnotationSession(self.doc, self.path).missed[0]["start_frame"], 1000)
 
+    def test_undetected_ball_is_stored_for_eval_and_reload(self):
+        s = AnnotationSession(self.doc, self.path)
+        entry = s.add_undetected_ball(Owner.PLAYER_B, before_throw_id=2)
+        s.save()
+        again = AnnotationSession(self.doc, self.path)
+        self.assertEqual(len(again.missed), 1)
+        self.assertEqual(again.missed[0]["kind"], "undetected_throw")
+        self.assertEqual(again.missed[0]["final_state"], "UNKNOWN")
+        self.assertEqual(entry["missed_id"], 1)
+        self.assertEqual(entry["before_throw_id"], 2)
+        self.assertEqual(entry["start_frame"], self.throws[1].start_frame - 1)
+        truth = expected_from_annotations(s.to_document())
+        self.assertEqual(truth["throws"][-1]["start_frame"], entry["start_frame"])
+
     def test_save_is_atomic_no_temp_file_left(self):
         AnnotationSession(self.doc, self.path).save()
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["annotations.json"])

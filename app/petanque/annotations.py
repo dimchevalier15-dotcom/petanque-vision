@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.petanque.throw_export import throw_card
-from app.petanque.throws import Owner, OwnerSource, ThrowEvent, ThrowType, format_time
+from app.petanque.throws import Owner, OwnerSource, ThrowEvent, ThrowResult, ThrowType, format_time
 
 HUMAN_CHOICES = (Owner.PLAYER_A, Owner.PLAYER_B, Owner.UNKNOWN)
 MATCH_START_TOLERANCE = 15  # frames
@@ -113,10 +113,49 @@ class AnnotationSession:
         t = self.throws[index]
         t.owner, t.owner_source, t.owner_confidence, t.human_is_throw = Owner.UNASSIGNED, None, None, None
 
+    def mark_out(self, index: int, flag: bool = True) -> None:
+        """Correction humaine : boule sortie du terrain (écrase le verdict auto du détecteur)."""
+        t = self.throws[index]
+        if flag:
+            t.final_state = ThrowResult.OUT_OF_PLAY
+            if not any(r.startswith("manual_out") for r in t.final_state_reasons):
+                t.final_state_reasons = list(t.final_state_reasons) + ["manual_out"]
+        elif any(r.startswith("manual_out") for r in t.final_state_reasons):
+            t.final_state_reasons = [r for r in t.final_state_reasons if not r.startswith("manual_out")]
+            if not t.final_state_reasons:
+                t.final_state = ThrowResult.ON_FIELD
+
     def add_missed(self, start_frame: int, end_frame: int, owner: Owner = Owner.UNASSIGNED,
                    final_state: str = "UNKNOWN", note: str = "") -> None:
         self.missed.append({"start_frame": start_frame, "end_frame": end_frame, "owner": owner.value,
                             "final_state": final_state, "note": note, "source": "MANUAL"})
+
+    def _next_missed_id(self) -> int:
+        ids = [int(m["missed_id"]) for m in self.missed if m.get("missed_id") is not None]
+        return (max(ids) if ids else 0) + 1
+
+    def add_undetected_ball(self, owner: Owner, before_throw_id: int, note: str = "") -> dict[str, Any]:
+        """Boule jouée mais non vue par le détecteur : entrée récap seulement (pas de position, pas d'impact mène)."""
+        if owner not in (Owner.PLAYER_A, Owner.PLAYER_B):
+            raise ValueError("Boule non détectée : équipe A ou B seulement")
+        ref = next((t for t in self.throws if t.throw_id == before_throw_id), None)
+        if ref is None:
+            raise ValueError(f"Lancer #{before_throw_id} inconnu")
+        at_frame = max(0, ref.start_frame - 1)
+        entry: dict[str, Any] = {
+            "missed_id": self._next_missed_id(),
+            "before_throw_id": before_throw_id,
+            "start_frame": at_frame,
+            "end_frame": at_frame,
+            "owner": owner.value,
+            "owner_source": OwnerSource.MANUAL.value,
+            "final_state": ThrowResult.UNKNOWN.value,
+            "kind": "undetected_throw",
+            "note": note,
+            "source": "MANUAL",
+        }
+        self.missed.append(entry)
+        return entry
 
     def is_done(self, index: int) -> bool:
         t = self.throws[index]

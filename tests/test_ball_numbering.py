@@ -6,7 +6,9 @@ import numpy as np
 
 from app.petanque.ball_numbering import (
     BallLabelRenderer,
+    NumberedBall,
     apply_collision_display,
+    display_position_at,
     number_balls,
     relocate_contact_ends,
 )
@@ -221,6 +223,15 @@ class TestRenderer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDisplayPosition(unittest.TestCase):
+    def test_uses_numbered_trajectory_not_throw_final(self):
+        t = make_throw(2, 10, 50, (100.0, 200.0))
+        nb = NumberedBall(2, t, [50, 60], [(400.0, 500.0), (410.0, 510.0)])
+        pos = display_position_at({2: nb}, {}, t, 60)
+        self.assertEqual(pos, (410.0, 510.0))
+        self.assertNotEqual(pos, t.final_position)
 
 
 class TestApproximatePosition(unittest.TestCase):
