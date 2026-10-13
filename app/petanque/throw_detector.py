@@ -151,8 +151,16 @@ class ThrowEventDetector:
         gs = self._gs
         if gs is None:
             return "unknown"
+        # Dès qu'une boule a été jouée, le but est posé pour la mène (même si YOLO le perd ensuite).
+        if gs.balls:
+            return "stabilized"
         if gs.jack.logical_track_id is None:
             return "no_jack"
+        from app.petanque.game_state import MenePhase
+
+        if gs.phase not in (MenePhase.SETUP, MenePhase.JACK_THROW):
+            if gs.jack.stabilized_frame is not None or gs.jack.position is not None:
+                return "stabilized"
         if gs.jack.stabilized_frame is None or gs.jack.state in ("MOVING", "SLOWING"):
             return "not_stabilized"  # jamais stabilisé, ou le but bouge de nouveau
         return "stabilized"
@@ -503,17 +511,21 @@ class ThrowEventDetector:
             return
 
         # --- boule au repos qui a disparu puis « repart » sous un autre track : déplacée, pas lancée ---
+        peak = m["max_speed_diam"]
         origin = None if is_jack else self._rest_origin(ep, pts, ids, tm)
         if origin is not None:
-            record.classification = MovementClass.DISPLACED
-            record.confidence = 0.7
-            record.continues_track = origin
-            record.reasons = ["starts_where_resting_ball_just_vanished", f"continues_ball_{origin}"]
-            self._finish(record, frame, None)
-            return
+            if peak >= tc.fast_speed and m["reach_diam"] >= tc.min_travel:
+                record.reasons.append(
+                    f"rest_origin_ignored_throw_like_peak_{peak:.2f}_reach_{m['reach_diam']:.1f}_diam")
+            else:
+                record.classification = MovementClass.DISPLACED
+                record.confidence = 0.7
+                record.continues_track = origin
+                record.reasons = ["starts_where_resting_ball_just_vanished", f"continues_ball_{origin}"]
+                self._finish(record, frame, None)
+                return
 
         # --- bruit : trop court / lent / bref ---
-        peak = m["max_speed_diam"]
         noise = []
         if m["reach_diam"] < tc.min_travel:  # portée, pas déplacement net : un rebond ne doit pas annuler le mouvement
             noise.append(f"reach_{m['reach_diam']:.1f}_diam_below_{tc.min_travel:g}")
@@ -536,7 +548,7 @@ class ThrowEventDetector:
             ep.jack_ctx = "not_stabilized"  # le but bougeait déjà (son événement de départ arrive avec retard)
 
         # --- score ---
-        reasons: list[str] = []
+        reasons: list[str] = list(record.reasons)
         score = 0.45
         if stitched is not None:
             reasons.append(f"fragments_recombined_{len(stitched.history)}_tracks")
@@ -571,7 +583,11 @@ class ThrowEventDetector:
             else:
                 add(-tc.zone_penalty, "origin_far_from_throw_zone")
         if ep.jack_ctx == "not_stabilized":
-            add(-tc.jack_unstable_penalty, "jack_not_stabilized_yet")
+            prior = sum(1 for b in (self._gs.balls if self._gs else []) if b.played_frame < ep.start_frame)
+            if prior > 0 and m["reach_diam"] >= tc.confident_travel:
+                reasons.append("jack_penalty_skipped_obvious_throw")
+            else:
+                add(-tc.jack_unstable_penalty, "jack_not_stabilized_yet")
         elif ep.jack_ctx == "no_jack":
             add(-tc.no_jack_penalty, "no_jack_seen")
         elif ep.jack_ctx == "stabilized":

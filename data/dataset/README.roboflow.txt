@@ -2,7 +2,7 @@
 Pétanque Boules et Cochonnet - D - vdataset petanque-boules-et-cochonnet-d
 ==============================
 
-This dataset was exported via roboflow.com on September 23, 2026 at 7:33 PM GMT
+This dataset was exported via roboflow.com on October 9, 2026 at 9:10 AM GMT
 
 Roboflow is an end-to-end computer vision platform that helps you
 * collaborate with your team on computer vision projects
@@ -17,7 +17,7 @@ visit https://github.com/roboflow/notebooks
 
 To find over 100k other datasets and pre-trained models, visit https://universe.roboflow.com
 
-The dataset includes 253 images.
+The dataset includes 311 images.
 P-tanque-Boules-et-Cochonnet-D are annotated in YOLOv8 format.
 
 No pre-processing or augmentation was applied.

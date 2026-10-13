@@ -4,12 +4,27 @@ import unittest
 
 import numpy as np
 
-from app.petanque.ball_numbering import BallLabelRenderer, number_balls, relocate_contact_ends
-from app.petanque.models import ObjectType, Observation
+from app.petanque.ball_numbering import (
+    BallLabelRenderer,
+    apply_collision_display,
+    number_balls,
+    relocate_contact_ends,
+)
+from app.petanque.throws import CollisionCandidate
+from app.petanque.config import PipelineConfig
+from app.petanque.models import ObjectType, Observation, distance
 from app.petanque.throws import ThrowEvent, ThrowResult, ThrowType
-from tests.test_throws import Y, jack_thrown, play, static_ball, thrown
+from tests.synthetic import SimObject
+from tests.test_throws import Y, hit_paths, jack_thrown, play, static_ball, thrown
 
 SIZE = 50.0
+_CFG = PipelineConfig()
+
+
+def _td(**kw):
+    base = {"movements": [], "throws": [], "tc": _CFG.throws, "fps": 30.0}
+    base.update(kw)
+    return type("TD", (), base)()
 
 
 def make_throw(tid, start, end, final, etype=ThrowType.THROW, state=ThrowResult.ON_FIELD, reasons=None, track=None):
@@ -18,7 +33,7 @@ def make_throw(tid, start, end, final, etype=ThrowType.THROW, state=ThrowResult.
         throw_id=tid, ball_track_id=track or tid, start_frame=start, end_frame=end, start_timestamp=start / 30,
         end_timestamp=end / 30, initial_position=(traj[0][1], traj[0][2]), final_position=final, trajectory=traj,
         final_state=state, confidence=0.9, detection_reasons=[], event_type=etype, final_state_reasons=reasons or [],
-        metrics={"size_px": SIZE}, track_id_history=[track or tid],
+        metrics={"size_px": SIZE, "reach_diam": 10.0}, track_id_history=[track or tid],
     )
 
 
@@ -44,38 +59,90 @@ class TestNumbering(unittest.TestCase):
     def test_out_of_play_ball_is_not_counted(self):
         a = make_throw(1, 100, 160, (500, 500))
         out = make_throw(2, 200, 260, (2000, 500), state=ThrowResult.OUT_OF_PLAY)
-        td = type("TD", (), {"movements": [], "throws": [a, out]})()
+        td = _td(throws=[a, out])
         tm = type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})()
         self.assertEqual([b.throw.throw_id for b in number_balls(td, tm)], [1])
 
     def test_position_follows_the_throw_then_stays_put(self):
-        b = number_balls(type("TD", (), {"movements": [], "throws": [make_throw(1, 100, 160, (500, 500))]})(),
+        b = number_balls(_td(throws=[make_throw(1, 100, 160, (500, 500))]),
                          type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})())[0]
         self.assertIsNone(b.position_at(99))  # pas de marque avant le lancer
         self.assertLess(b.position_at(120)[0], 500)
         self.assertEqual(b.position_at(160), (500, 500))
         self.assertEqual(b.position_at(5000), (500, 500))  # immobile ensuite
 
+    def test_rest_position_ignores_drifting_track_after_stop(self):
+        """Après l'arrêt, l'anneau reste sur final_position : pas de suivi d'un track YOLO qui dérive."""
+        t = make_throw(1, 100, 160, (400, 300), track=17)
+        drift = type("Tr", (), {
+            "trajectory": [type("P", (), {"frame": f, "pos": (900.0, 300.0)})() for f in range(161, 500)],
+            "last_detection_frame": 499,
+            "state": type("S", (), {"value": "STATIONARY"})(),
+            "logical_track_id": 17,
+        })()
+        tm = type("TM", (), {"tracks": {17: drift}, "resolve": staticmethod(lambda i: i)})()
+        b = number_balls(_td(throws=[t]), tm)[0]
+        self.assertEqual(b.position_at(400), (400, 300))
+        self.assertEqual(b.position_at(450), (400, 300))
 
-class TestPushedBallKeepsItsNumber(unittest.TestCase):
-    def test_numbered_ball_pushed_away_under_a_new_track_is_followed_not_renumbered(self):
+
+class TestCarreauSupersession(unittest.TestCase):
+    def test_replacement_throw_near_a_vanished_ball_retires_the_old_number(self):
         a = thrown(1, (200, Y), (30, 0), start=100, decay=0.95, last_frame=400)
         rest = play([jack_thrown(), a], 330)[2].throws[0].final_position
-        c = thrown(3, (rest[0], rest[1] - 45), (0, -25), start=406, decay=0.95)
-        tm, _, td = play([jack_thrown(), a, c], 560)
+        c = thrown(3, (rest[0] - 35, rest[1] + 25), (35, -5), start=406, decay=0.96)
+        tm, _, td = play([jack_thrown(), a, c], 620)
         balls = number_balls(td, tm)
-        self.assertEqual([b.number for b in balls], [1])  # pas de boule n°2 : c'est la n°1 qui a bougé
-        self.assertAlmostEqual(balls[0].position_at(330)[0], rest[0], delta=40)  # (elle finit de rouler un peu)
-        end = balls[0].position_at(559)
-        self.assertLess(end[1], rest[1] - 200)  # elle est maintenant là où elle s'est arrêtée
-        self.assertAlmostEqual(end[0], rest[0], delta=15)
+        self.assertEqual(len(balls), 2)
+        self.assertIsNotNone(balls[0].retired_after)
+        self.assertIsNone(balls[0].position_at(balls[0].retired_after + 30))
+        self.assertIsNotNone(balls[1].position_at(500))
+
+
+class TestCollisionDisplay(unittest.TestCase):
+    def test_collision_tracking_separates_numbered_balls_after_impact(self):
+        """Après choc, tireur et cible suivent des détections distinctes (pas d'échange des anneaux)."""
+        victim_throw = make_throw(1, 50, 90, (500.0, 500.0), track=1)
+        attacker_throw = make_throw(2, 95, 100, (470.0, 500.0), track=2)
+        td = _td(throws=[victim_throw, attacker_throw])
+        td.collisions = [
+            CollisionCandidate(
+                collision_id=1, frame=100, detected_frame=105,
+                source_ball=2, target_ball=1, target_type="BALL",
+                kind="impact_on_static", confidence=0.9, reasons=[],
+                min_distance_diam=0.2, position=(485.0, 500.0),
+            ),
+        ]
+        tm = type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})()
+        balls = number_balls(td, tm)
+        fr: list[list] = [[] for _ in range(140)]
+        for f in range(101, 120):
+            fr[f].append(obs(f, 460 + (f - 100) * 2, 498))  # tireur : tangente (vers la gauche)
+            fr[f].append(obs(f, 510 + (f - 100) * 3, 500))  # cible : normale (vers la droite)
+        apply_collision_display(balls, td, tm, fr)
+        b1, b2 = balls[0], balls[1]
+        p1, p2 = b1.position_at(115), b2.position_at(115)
+        self.assertGreater(p1[0], p2[0])  # victime (n°1) à droite du tireur (n°2)
+        self.assertGreater(distance(p1, p2), 50)
+        # après la fin des détections : dernière position collision conservée (pas de retour au repos figé)
+        self.assertEqual(b1.position_at(125), b1.position_at(119))
+        self.assertEqual(b2.position_at(125), b2.position_at(119))
+
+
+class TestPushedBallKeepsItsNumber(unittest.TestCase):
+    def test_numbered_ball_pushed_by_a_shot_keeps_its_number_when_track_id_changes(self):
+        a_path, b_path, _ = hit_paths(150, (200, Y), (30, 0), (920, Y), 60, a_after=(0, 0), b_after=(18, 0))
+        tm, _, td = play([jack_thrown(), SimObject(1, a_path, first_frame=150), SimObject(2, b_path, first_frame=0)], 420)
+        balls = number_balls(td, tm)
+        self.assertEqual([b.number for b in balls], [1])  # seul le tireur est numéroté ; la poussée suit le n°1 via DISPLACED
+        self.assertGreater(balls[0].position_at(400)[0], 850)
 
 
 class TestRelocation(unittest.TestCase):
     def setUp(self):
         self.first = make_throw(1, 100, 160, (850, 500))
         self.lost = make_throw(2, 300, 330, (700, 500), reasons=["lost_in_contact_with_ball_1", "probable_stop_against_ball"])
-        self.td = type("TD", (), {"movements": [], "throws": [self.first, self.lost]})()
+        self.td = _td(throws=[self.first, self.lost])
         self.tm = type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})()
 
     def frames(self, extra):
@@ -127,7 +194,7 @@ class TestRelocation(unittest.TestCase):
 
 class TestRenderer(unittest.TestCase):
     def test_marks_only_numbered_balls_and_counts_them(self):
-        tds = type("TD", (), {"movements": [], "throws": [make_throw(1, 100, 160, (400, 300)), make_throw(2, 200, 260, (700, 300))]})()
+        tds = _td(throws=[make_throw(1, 100, 160, (400, 300)), make_throw(2, 200, 260, (700, 300))])
         tm = type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})()
         balls = number_balls(tds, tm)
         r = BallLabelRenderer(balls, 1.0)
@@ -159,9 +226,9 @@ if __name__ == "__main__":
 class TestApproximatePosition(unittest.TestCase):
     def test_ring_is_dashed_only_for_approximate_positions(self):
         tm = type("TM", (), {"tracks": {}, "resolve": staticmethod(lambda i: i)})()
-        exact = number_balls(type("TD", (), {"movements": [], "throws": [make_throw(1, 100, 160, (400, 300))]})(), tm)
-        contact = number_balls(type("TD", (), {"movements": [], "throws": [
-            make_throw(1, 100, 160, (400, 300), reasons=["lost_in_contact_with_ball_9"])]})(), tm)
+        exact = number_balls(_td(throws=[make_throw(1, 100, 160, (400, 300))]), tm)
+        contact = number_balls(_td(throws=[
+            make_throw(1, 100, 160, (400, 300), reasons=["lost_in_contact_with_ball_9"])]), tm)
         blank = np.zeros((600, 1000, 3), np.uint8)
         a = BallLabelRenderer(exact).draw(blank.copy(), 400, 30.0)
         b = BallLabelRenderer(contact).draw(blank.copy(), 400, 30.0)

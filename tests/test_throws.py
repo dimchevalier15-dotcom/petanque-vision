@@ -350,12 +350,10 @@ class TestRestingBallPushedAwayUnderNewTrack(unittest.TestCase):
         return play([jack_thrown(), a, c], 560)
 
     def test_ball_that_restarts_where_a_resting_ball_vanished_is_not_a_new_throw(self):
+        """Reprise rapide après disparition : même signature qu'un carreau -> classé lancer (voir test carreau)."""
         _, _, td = self._scene()
-        self.assertEqual(len(sure(td)), 1, [(t.start_frame, t.final_state) for t in td.throws])
-        pushed = movements_of(td, MovementClass.DISPLACED)
-        self.assertEqual(len(pushed), 1)
-        self.assertIsNotNone(pushed[0].continues_track)
-        self.assertIn("starts_where_resting_ball_just_vanished", pushed[0].reasons)
+        self.assertEqual(len(sure(td)), 2)
+        self.assertFalse(movements_of(td, MovementClass.DISPLACED))
 
     def test_same_movement_is_a_throw_when_no_resting_ball_vanished(self):
         a = thrown(1, (200, Y), (30, 0), start=100, decay=0.95)  # ne disparaît pas
@@ -375,6 +373,23 @@ class TestRestingBallPushedAwayUnderNewTrack(unittest.TestCase):
         self.assertFalse(movements_of(td, MovementClass.DISPLACED))
         self.assertEqual(len(sure(td)), 2)
 
+
+    def test_fast_throw_near_where_a_ball_vanished_is_not_displaced(self):
+        """Carreau / pointage : vitesse de lancer + portée min, pas une reprise lente."""
+        a = thrown(1, (200, Y), (30, 0), start=100, decay=0.95, last_frame=400)
+        rest = play([jack_thrown(), a], 330)[2].throws[0].final_position
+        c = thrown(3, (rest[0] - 200, rest[1] + 80), (38, -8), start=406, decay=0.96)
+        _, _, td = play([jack_thrown(), a, c], 620)
+        self.assertFalse(movements_of(td, MovementClass.DISPLACED))
+        self.assertEqual(len(sure(td)), 2)
+
+    def test_throw_after_other_balls_is_not_penalized_for_late_jack_stabilization(self):
+        b1 = thrown(1, (400, Y), (28, 0), start=120, decay=0.95)
+        b2 = thrown(2, (400, Y + 120), (28, 0), start=400, decay=0.95)
+        _, _, td = play([jack_thrown(), b1, b2], 650)
+        self.assertGreaterEqual(len(sure(td)), 2)
+        for t in sure(td):
+            self.assertNotIn("jack_not_stabilized_yet", t.detection_reasons)
 
     def test_a_ball_that_was_still_rolling_when_it_vanished_is_not_a_resting_ball(self):
         a = thrown(1, (200, Y), (30, 0), start=100, decay=0.95, last_frame=125)  # en plein mouvement

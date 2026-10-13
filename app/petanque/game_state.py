@@ -300,27 +300,45 @@ class PetanqueGameState:
                    player=(rec.player_context.player_id if rec.player_context else None), **data)
 
     # -------------------------------------------------------------------- jack
+    def _jack_rank(self, t: BallTrack, frame: int, incumbent: int | None) -> tuple[float, ...]:
+        """Un seul but en jeu : priorité au track déjà retenu, puis ancienneté / présence / confiance."""
+        on_field = 1.0 if self.field.contains(t.current_position) else 0.0
+        stat = 3.0 if t.motion == BallState.STATIONARY else (2.0 if t.motion == BallState.SLOWING else 1.0)
+        tenure = float(frame - t.first_seen_frame)
+        inc = 1.0 if incumbent is not None and t.logical_track_id == incumbent else 0.0
+        return (inc, on_field, stat, tenure, float(t.hits), t.detection_confidence)
+
     def _update_jack(self, frame: int, tm: TrackManager, live: list[BallTrack]) -> None:
-        jt = tm.tracks.get(self.jack.logical_track_id) if self.jack.logical_track_id is not None else None
+        grace = self._frames(self.gcfg.jack_loss_grace)
+        inc_id = self.jack.logical_track_id
+        jt = tm.tracks.get(inc_id) if inc_id is not None else None
         if jt is not None and jt.merged_into is not None:
             jt = tm.tracks.get(tm.resolve(jt.logical_track_id))
             self.jack.logical_track_id = jt.logical_track_id if jt else None
-        if jt is not None and jt.state == BallState.LOST and frame - jt.last_detection_frame > self._frames(self.gcfg.jack_loss_grace):
+            inc_id = self.jack.logical_track_id
+        if jt is not None and jt.state == BallState.LOST and frame - jt.last_detection_frame > grace:
             jt = None
+        if jt is None and inc_id is not None:
+            inc = tm.tracks.get(tm.resolve(inc_id))
+            if inc is not None and inc.object_type == ObjectType.JACK and frame - inc.last_detection_frame <= grace:
+                jt = inc
         if jt is None:
             cands = [t for t in live if t.object_type == ObjectType.JACK and t.frames_missing(frame) == 0]
             if not cands:
                 if self.jack.logical_track_id is not None:
                     self.jack.state = "UNKNOWN"
                 return
-            jt = max(cands, key=lambda t: (t.motion == BallState.STATIONARY, t.hits * t.detection_confidence))
-            self.jack = JackRecord(logical_track_id=jt.logical_track_id, thrown_frame=frame,
-                                   confidence=jt.confidence, position=None)
-            self._emit(EventType.JACK_DETECTED, frame, jt.logical_track_id, confidence=jt.confidence,
-                       reasons=["best_jack_candidate"], position=jt.current_position, state=jt.motion.value)
-            if self.phase == MenePhase.SETUP:
-                self._set_phase(MenePhase.JACK_THROW, frame, ["jack_detected"], jt.confidence)
-            self._jack_moving = jt.motion in (BallState.MOVING, BallState.SLOWING)
+            jt = max(cands, key=lambda t: self._jack_rank(t, frame, inc_id))
+            new_id = jt.logical_track_id
+            if self.jack.logical_track_id != new_id:
+                self.jack = JackRecord(
+                    logical_track_id=new_id, thrown_frame=frame, confidence=jt.confidence, position=None,
+                )
+                self._emit(EventType.JACK_DETECTED, frame, new_id, confidence=jt.confidence,
+                           reasons=["best_jack_candidate"], position=jt.current_position, state=jt.motion.value)
+                if self.phase == MenePhase.SETUP:
+                    self._set_phase(MenePhase.JACK_THROW, frame, ["jack_detected"], jt.confidence)
+                self._jack_moving = jt.motion in (BallState.MOVING, BallState.SLOWING)
 
         visible = jt.frames_missing(frame) == 0
         self.jack.state = jt.motion.value if visible else BallState.OCCLUDED.value

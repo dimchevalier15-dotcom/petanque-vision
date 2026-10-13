@@ -21,7 +21,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.petanque.ball_numbering import BallLabelRenderer, number_balls, relocate_contact_ends  # noqa: E402
+from app.petanque.ball_numbering import (  # noqa: E402
+    BallLabelRenderer,
+    apply_collision_display,
+    number_balls,
+    relocate_contact_ends,
+)
 from app.petanque.config import load_config  # noqa: E402
 from app.petanque.field import build_field  # noqa: E402
 from app.petanque.jack_locator import JackLocator, find_jack_seed, median_ball_size, yolo_jack_hints  # noqa: E402
@@ -59,6 +64,7 @@ def main() -> None:
     run = run_pipeline(frames, cfg, field_, fps)  # 1re passe : décider quelles boules sont des lancers
     balls = number_balls(run.td, run.tm)
     relocate_contact_ends(balls, frames)
+    apply_collision_display(balls, run.td, run.tm, frames)
     uncertain = [t for t in run.td.throws if t.event_type == ThrowType.UNKNOWN]
     doc = {
         "video": str(args.video),

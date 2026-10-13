@@ -4,13 +4,15 @@ Une boule n'est numérotée que si un ThrowEvent de type THROW l'a désignée et
 Les mouvements UNKNOWN (à revoir), les boules simplement présentes, le cochonnet, les boules sorties du terrain :
 pas de numéro. Aucune identité de joueur ici.
 
-Positions : celles du ThrowEvent pendant le lancer, puis celles du track logique tant qu'il est observé,
-sinon la dernière position connue (une boule arrêtée ne bouge pas toute seule).
+Positions : trajectoire du lancer, puis repos figé (sans dérive du track YOLO). Après une collision
+détectée, tireur et cible sont suivies via les détections YOLO assignées selon la normale de choc
+(victime poussée le long de la normale, tireur surtout le long de la tangente).
 """
 
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,8 +20,12 @@ import numpy as np
 
 from app.petanque.models import ObjectType, Observation, Point, distance
 from app.petanque.throw_detector import ThrowEventDetector
-from app.petanque.throws import MovementClass, ThrowEvent, ThrowResult, ThrowType
+from app.petanque.throws import CollisionCandidate, MovementClass, ThrowEvent, ThrowResult, ThrowType
 from app.petanque.track_manager import TrackManager
+
+_COLLISION_MIN_CONF = 0.55
+_COLLISION_TRACK_FRAMES = 150
+_COLLISION_SEARCH_DIAM = 5.0
 
 RING_FLIGHT = (0, 165, 255)  # BGR orange : en vol
 RING_REST = (80, 220, 80)  # vert : arrêtée
@@ -32,9 +38,12 @@ class NumberedBall:
     frames: list[int] = field(default_factory=list)  # positions connues (triées)
     points: list[Point] = field(default_factory=list)
     position_source: str = "tracked"  # tracked | last_seen_in_contact | relocated_from_detections
+    retired_after: int | None = None  # carreau / remplacement : ne plus afficher après cette frame
 
     def position_at(self, frame: int) -> Point | None:
         if frame < self.throw.start_frame or not self.frames:
+            return None
+        if self.retired_after is not None and frame > self.retired_after:
             return None
         i = bisect.bisect_right(self.frames, frame) - 1
         return self.points[max(0, i)]
@@ -54,7 +63,233 @@ class NumberedBall:
             "confidence": round(t.confidence, 3),
             "track_ids": t.track_id_history,
             "reasons": t.detection_reasons,
+            "retired_after": self.retired_after,
         }
+
+
+def _last_observed_frame(tm: TrackManager, t: ThrowEvent) -> int:
+    last = t.end_frame
+    for tr in tm.tracks.values():
+        if tr.trajectory:
+            last = max(last, tr.trajectory[-1].frame)
+    return last
+
+
+def _hold_at_rest(pos: dict[int, Point], from_frame: int, to_frame: int, rest: Point) -> None:
+    for f in range(from_frame, to_frame + 1):
+        pos.setdefault(f, rest)
+
+
+def _merge_positions(ball: NumberedBall, extra: dict[int, Point]) -> None:
+    pos = {f: p for f, p in zip(ball.frames, ball.points)}
+    pos.update(extra)
+    ball.frames = sorted(pos)
+    ball.points = [pos[f] for f in ball.frames]
+
+
+def _merge_collision_segment(ball: NumberedBall, from_frame: int, segment: dict[int, Point]) -> None:
+    """À partir du choc : remplace tout l'historique (repos figé, DISPLACED, relocate) par le suivi collision."""
+    pos = {f: p for f, p in zip(ball.frames, ball.points) if f < from_frame}
+    pos.update(segment)
+    ball.frames = sorted(pos)
+    ball.points = [pos[f] for f in ball.frames]
+
+
+def _hold_segment_tail(segment: dict[int, Point], last_frame: int) -> None:
+    if not segment:
+        return
+    end = max(segment)
+    p = segment[end]
+    for f in range(end + 1, last_frame + 1):
+        segment[f] = p
+
+
+def _ball_identity_ids(ball: NumberedBall, tm: TrackManager) -> set[int]:
+    t = ball.throw
+    return {tm.resolve(i) for i in t.track_id_history} | {tm.resolve(t.ball_track_id)}
+
+
+def _ball_for_logical(balls: list[NumberedBall], tm: TrackManager, logical_id: int) -> NumberedBall | None:
+    want = tm.resolve(logical_id)
+    for b in balls:
+        if want in _ball_identity_ids(b, tm):
+            return b
+    return None
+
+
+def _unit(v: Point) -> Point:
+    n = math.hypot(v[0], v[1])
+    return (v[0] / n, v[1] / n) if n > 1e-9 else (0.0, 0.0)
+
+
+def _dot(a: Point, b: Point) -> float:
+    return a[0] * b[0] + a[1] * b[1]
+
+
+def _add(a: Point, b: Point) -> Point:
+    return (a[0] + b[0], a[1] + b[1])
+
+
+def _scale(v: Point, k: float) -> Point:
+    return (v[0] * k, v[1] * k)
+
+
+def _throw_pos_at(traj: list[tuple], frame: int) -> Point | None:
+    last: Point | None = None
+    for f, x, y in traj:
+        if f == frame:
+            return (x, y)
+        if f <= frame:
+            last = (x, y)
+    return last
+
+
+def _approach_dir(traj: list[tuple], frame: int, back: int = 8) -> Point | None:
+    pts = [(f, x, y) for f, x, y in traj if frame - back <= f < frame]
+    if len(pts) < 2:
+        pts = [(f, x, y) for f, x, y in traj if f <= frame][-2:]
+    if len(pts) < 2:
+        return None
+    return (pts[-1][1] - pts[0][1], pts[-1][2] - pts[0][2])
+
+
+def _motion_align_cost(obs: Point, prev: Point, pred: Point, dir_hat: Point) -> float:
+    cost = distance(obs, pred)
+    step = (obs[0] - prev[0], obs[1] - prev[1])
+    if math.hypot(step[0], step[1]) > 1e-6 and _dot(_unit(step), dir_hat) < 0:
+        cost += 80.0
+    return cost
+
+
+def _assign_pair(
+    cands: list[Point],
+    pa_pred: Point,
+    pv_pred: Point,
+    pa_prev: Point,
+    pv_prev: Point,
+    v_t: Point,
+    n: Point,
+) -> tuple[Point | None, Point | None]:
+    if not cands:
+        return None, None
+    if len(cands) == 1:
+        c = cands[0]
+        if _motion_align_cost(c, pa_prev, pa_pred, v_t) <= _motion_align_cost(c, pv_prev, pv_pred, n):
+            return c, None
+        return None, c
+    cost0 = _motion_align_cost(cands[0], pa_prev, pa_pred, v_t) + _motion_align_cost(cands[1], pv_prev, pv_pred, n)
+    cost1 = _motion_align_cost(cands[1], pa_prev, pa_pred, v_t) + _motion_align_cost(cands[0], pv_prev, pv_pred, n)
+    if cost1 < cost0:
+        return cands[1], cands[0]
+    return cands[0], cands[1]
+
+
+def _track_collision_pair(
+    attacker: NumberedBall,
+    victim: NumberedBall,
+    collision: CollisionCandidate,
+    frames: list[list[Observation]],
+    size: float,
+    all_balls: list[NumberedBall],
+) -> None:
+    """Suit les deux boules après le choc : normale = tireur → cible, victime le long de +n, tireur le long de la tangente."""
+    cf = collision.frame
+    f_end = min(len(frames) - 1, cf + _COLLISION_TRACK_FRAMES)
+    traj = attacker.throw.trajectory
+    src = _throw_pos_at(traj, cf) or collision.position
+    vic = victim.position_at(cf - 1) or victim.position_at(cf) or collision.position
+    n = _unit((vic[0] - src[0], vic[1] - src[1]))
+    raw_v = _approach_dir(traj, cf) or n
+    vn = _dot(raw_v, n)
+    v_t = _scale(n, vn)
+    v_t = (raw_v[0] - v_t[0], raw_v[1] - v_t[1])
+    if math.hypot(v_t[0], v_t[1]) < 1e-6:
+        v_t = (-n[1], n[0])
+    else:
+        v_t = _unit(v_t)
+
+    step = max(size * 0.12, 4.0)
+    max_jump = 2.2 * size
+    extra_a: dict[int, Point] = {}
+    extra_v: dict[int, Point] = {}
+    pa, pv = src, vic
+    extra_a[cf] = pa
+    extra_v[cf] = pv
+    still = 0
+    radius = _COLLISION_SEARCH_DIAM * size
+
+    for f in range(cf + 1, f_end + 1):
+        pa_pred = _add(pa, _scale(v_t, step))
+        pv_pred = _add(pv, _scale(n, step * 0.85))
+        occupied: list[Point] = []
+        for b in all_balls:
+            if b is attacker or b is victim:
+                continue
+            p = b.position_at(f)
+            if p is not None:
+                occupied.append(p)
+        cands: list[Point] = []
+        for o in frames[f]:
+            if o.object_type != ObjectType.BALL:
+                continue
+            c = o.center
+            if any(distance(c, o) < 0.85 * size for o in occupied):
+                continue
+            if distance(c, pa_pred) <= radius or distance(c, pv_pred) <= radius:
+                cands.append(c)
+        if len(cands) > 2:
+            mid = ((pa_pred[0] + pv_pred[0]) / 2, (pa_pred[1] + pv_pred[1]) / 2)
+            cands = sorted(cands, key=lambda c: distance(c, mid))[:2]
+        oa, ov = _assign_pair(cands, pa_pred, pv_pred, pa, pv, v_t, n)
+        if oa is not None and distance(oa, pa) > max_jump and distance(oa, pa_pred) > max_jump:
+            oa = None
+        if ov is not None and distance(ov, pv) > max_jump and distance(ov, pv_pred) > max_jump:
+            ov = None
+        moved = 0.0
+        if oa is not None:
+            moved += distance(oa, pa)
+            pa = oa
+            extra_a[f] = pa
+        if ov is not None:
+            moved += distance(ov, pv)
+            pv = ov
+            extra_v[f] = pv
+        if oa is None and ov is None:
+            still += 1
+        elif moved < size * 0.06:
+            still += 1
+        else:
+            still = 0
+        if still >= 10:
+            break
+
+    clip_end = len(frames) - 1
+    _hold_segment_tail(extra_a, clip_end)
+    _hold_segment_tail(extra_v, clip_end)
+    _merge_collision_segment(attacker, cf, extra_a)
+    _merge_collision_segment(victim, cf, extra_v)
+    attacker.position_source = "tracked"
+    victim.position_source = "tracked"
+
+
+def apply_collision_display(
+    balls: list[NumberedBall],
+    td: ThrowEventDetector,
+    tm: TrackManager,
+    frames: list[list[Observation]],
+) -> None:
+    """Ré-ancre les anneaux après choc sur les bonnes bbox (géométrie de la trajectoire d'approche)."""
+    for c in td.collisions:
+        if c.target_type != "BALL" or c.confidence < _COLLISION_MIN_CONF:
+            continue
+        if c.kind not in ("impact_on_static", "moving_moving"):
+            continue
+        attacker = _ball_for_logical(balls, tm, c.source_ball)
+        victim = _ball_for_logical(balls, tm, c.target_ball)
+        if attacker is None or victim is None or attacker is victim:
+            continue
+        size = float(attacker.throw.metrics.get("size_px", 50.0))
+        _track_collision_pair(attacker, victim, c, frames, size, balls)
 
 
 def _follow_displacements(pos: dict[int, Point], ids: set[int], td: ThrowEventDetector, tm: TrackManager) -> None:
@@ -80,17 +315,43 @@ def number_balls(td: ThrowEventDetector, tm: TrackManager) -> list[NumberedBall]
     balls: list[NumberedBall] = []
     for n, t in enumerate(sorted(kept, key=lambda t: (t.start_frame, t.throw_id)), start=1):
         pos: dict[int, Point] = {f: (x, y) for f, x, y in t.trajectory}
-        track = tm.tracks.get(tm.resolve(t.ball_track_id))
-        if track is not None:
-            for p in track.trajectory:  # après l'arrêt : le track continue (boule poussée par un autre lancer)
-                if p.frame > t.end_frame:
-                    pos[p.frame] = p.pos
         pos.setdefault(t.end_frame, t.final_position)
-        _follow_displacements(pos, {tm.resolve(i) for i in t.track_id_history} | {tm.resolve(t.ball_track_id)}, td, tm)
+        identity_ids = {tm.resolve(i) for i in t.track_id_history} | {tm.resolve(t.ball_track_id)}
+        last_frame = _last_observed_frame(tm, t)
+        _hold_at_rest(pos, t.end_frame + 1, last_frame, t.final_position)
+        _follow_displacements(pos, identity_ids, td, tm)
         frames = sorted(pos)
         src = "last_seen_in_contact" if any(r.startswith("lost_in_contact") for r in t.final_state_reasons) else "tracked"
         balls.append(NumberedBall(n, t, frames, [pos[f] for f in frames], position_source=src))
+    _apply_carreau_supersession(balls, td, tm)
     return balls
+
+
+def _apply_carreau_supersession(balls: list[NumberedBall], td: ThrowEventDetector, tm: TrackManager) -> None:
+    """Une nouvelle boule jouée tout près d'une boule dont le track vient de disparaître = carreau :
+    l'ancienne (souvent sortie / remplacée) ne reste plus affichée à cet endroit."""
+    tc = td.tc
+    fps = td.fps
+    win = max(1, round(tc.rest_origin_window * fps))
+    for later in sorted(td.throws, key=lambda t: t.start_frame):
+        if later.event_type not in (ThrowType.THROW, ThrowType.UNKNOWN):
+            continue
+        if later.metrics.get("reach_diam", 0) < tc.min_travel:
+            continue
+        size = float(later.metrics.get("size_px", 50.0))
+        for b in balls:
+            if b.retired_after is not None or later.start_frame <= b.throw.end_frame:
+                continue
+            track = tm.tracks.get(tm.resolve(b.throw.ball_track_id))
+            if track is None:
+                continue
+            anchor = b.points[-1] if b.points else b.throw.final_position
+            last_seen = track.last_detection_frame
+            if later.start_frame - last_seen > win:
+                continue
+            if distance(later.initial_position, anchor) > tc.rest_origin_distance * size:
+                continue
+            b.retired_after = last_seen
 
 
 def relocate_contact_ends(balls: list[NumberedBall], frames: list[list[Observation]], radius_diam: float = 4.0,
@@ -159,6 +420,8 @@ class BallLabelRenderer:
         for b in self.balls:
             p = b.position_at(frame)
             if p is None:
+                continue
+            if b.retired_after is not None and frame > b.retired_after:
                 continue
             live += 1
             t = b.throw
